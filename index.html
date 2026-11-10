@@ -1,1 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Money Clicker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f3f7f2;
+      color: #1d2b1f;
+    }
+    header { text-align: center; padding: 16px; }
+    h1 { margin: 8px 0; }
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 16px 32px;
+    }
+    @media (max-width: 800px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    }
+    .panel h2 { margin-top: 0; font-size: 20px; }
+    .main { text-align: center; }
+    #score { font-size: 44px; font-weight: bold; margin: 8px 0; word-break: break-all; }
+    .stats { color: #4a5d4c; margin: 4px 0; }
+    #clickButton {
+      font-size: 64px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      border: none;
+      background: #2e9b47;
+      color: #fff;
+      cursor: pointer;
+      margin: 16px auto;
+      display: block;
+      box-shadow: 0 4px 0 #1f6e31;
+      transition: transform 0.05s;
+      user-select: none;
+    }
+    #clickButton:active { transform: translateY(4px); box-shadow: 0 0 0 #1f6e31; }
+    .shop-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      border: 1px solid #cfdccf;
+      border-radius: 8px;
+      background: #f8fbf8;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+      color: inherit;
+    }
+    .shop-item:hover:not(:disabled) { background: #e7f4e8; }
+    .shop-item:disabled { opacity: 0.5; cursor: not-allowed; }
+    .item-name { font-weight: bold; }
+    .item-desc { font-size: 13px; color: #4a5d4c; }
+    .item-right { text-align: right; white-space: nowrap; }
+    .item-cost { font-weight: bold; color: #1f6e31; }
+    .item-owned { font-size: 13px; color: #4a5d4c; }
+    #resetButton {
+      margin-top: 16px;
+      background: none;
+      border: 1px solid #b44;
+      color: #b44;
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .float-text {
+      position: fixed;
+      pointer-events: none;
+      font-weight: bold;
+      color: #2e9b47;
+      animation: floatUp 0.8s ease-out forwards;
+    }
+    @keyframes floatUp {
+      from { opacity: 1; transform: translate(-50%, 0); }
+      to { opacity: 0; transform: translate(-50%, -60px); }
+    }
+    #offlinePopup {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #offlinePopup .panel { max-width: 360px; text-align: center; }
+    #offlinePopup button {
+      font-size: 16px;
+      padding: 8px 20px;
+      border: none;
+      border-radius: 6px;
+      background: #2e9b47;
+      color: #fff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Money Clicker</h1>
+    <p>Click to get money, buy upgrades to get more money, and reach the top of the leaderboard.</p>
+  </header>
 
+  <div class="layout">
+    <section class="panel">
+      <h2>Click Upgrades</h2>
+      <div id="clickShop"></div>
+    </section>
+
+    <section class="panel main">
+      <div id="score">$0</div>
+      <div class="stats" id="mpc">Money per Click: $1</div>
+      <div class="stats" id="mps">Money per Second: $0</div>
+      <button id="clickButton" aria-label="Click for money">$</button>
+      <div class="stats" id="totalEarned">Total earned: $0</div>
+      <button id="resetButton">Reset progress</button>
+    </section>
+
+    <section class="panel">
+      <h2>Auto Clickers</h2>
+      <div id="autoShop"></div>
+    </section>
+  </div>
+
+  <div id="offlinePopup">
+    <div class="panel">
+      <h2>Welcome back!</h2>
+      <p id="offlineText"></p>
+      <button id="offlineClose">Collect</button>
+    </div>
+  </div>
+
+  <script>
+    const SAVE_KEY = "moneyClickerSave";
+    const COST_GROWTH = 1.15;          // each purchase makes the next one 15% pricier
+    const OFFLINE_RATE = 0.5;          // offline earnings are 50% of normal income
+    const OFFLINE_CAP_SECONDS = 8 * 60 * 60; // offline earnings stop after 8 hours
+
+    // Click upgrades: each one owned adds `power` to money per click.
+    const clickUpgrades = [
+      { id: "betterFinger", name: "Stronger Finger", baseCost: 15, power: 1, desc: "+$1 per click" },
+      { id: "goldenMouse", name: "Golden Mouse", baseCost: 100, power: 5, desc: "+$5 per click" },
+      { id: "diamondTap", name: "Diamond Tap", baseCost: 1100, power: 25, desc: "+$25 per click" },
+      { id: "moneyHands", name: "Money Hands", baseCost: 12000, power: 150, desc: "+$150 per click" },
+      { id: "midasTouch", name: "Midas Touch", baseCost: 130000, power: 1000, desc: "+$1,000 per click" },
+    ];
+
+    // Auto clickers: each one owned adds `rate` to money per second.
+    const autoClickers = [
+      { id: "piggyBank", name: "Piggy Bank", baseCost: 20, rate: 0.5, desc: "+$0.5 per second" },
+      { id: "lemonade", name: "Lemonade Stand", baseCost: 150, rate: 3, desc: "+$3 per second" },
+      { id: "atm", name: "ATM", baseCost: 1500, rate: 20, desc: "+$20 per second" },
+      { id: "bank", name: "Bank", baseCost: 16000, rate: 120, desc: "+$120 per second" },
+      { id: "mint", name: "Money Mint", baseCost: 180000, rate: 800, desc: "+$800 per second" },
+      { id: "stockMarket", name: "Stock Market", baseCost: 2000000, rate: 6000, desc: "+$6,000 per second" },
+    ];
+
+    let state = freshState();
+
+    function freshState() {
+      return { money: 0, totalEarned: 0, owned: {}, lastSaved: Date.now() };
+    }
+
+    function owned(id) {
+      return state.owned[id] || 0;
+    }
+
+    function costOf(item) {
+      return Math.ceil(item.baseCost * Math.pow(COST_GROWTH, owned(item.id)));
+    }
+
+    function moneyPerClick() {
+      return 1 + clickUpgrades.reduce((sum, u) => sum + u.power * owned(u.id), 0);
+    }
+
+    function moneyPerSecond() {
+      return autoClickers.reduce((sum, a) => sum + a.rate * owned(a.id), 0);
+    }
+
+    function format(n) {
+      if (n < 1000) return n < 10 && n % 1 !== 0 ? n.toFixed(1) : Math.floor(n).toString();
+      const units = ["", "K", "M", "B", "T", "Qa", "Qi"];
+      let i = 0;
+      while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+      return n.toFixed(2) + units[i];
+    }
+
+    function formatDuration(seconds) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      if (h > 0) return h + "h " + m + "m";
+      if (m > 0) return m + "m " + s + "s";
+      return s + "s";
+    }
+
+    function earn(amount) {
+      state.money += amount;
+      state.totalEarned += amount;
+    }
+
+    function buy(item) {
+      const cost = costOf(item);
+      if (state.money < cost) return;
+      state.money -= cost;
+      state.owned[item.id] = owned(item.id) + 1;
+      render();
+      save();
+    }
+
+    function buildShop(containerId, items) {
+      const container = document.getElementById(containerId);
+      for (const item of items) {
+        const btn = document.createElement("button");
+        btn.className = "shop-item";
+        btn.id = "shop-" + item.id;
+        btn.innerHTML =
+          '<div><div class="item-name"></div><div class="item-desc"></div></div>' +
+          '<div class="item-right"><div class="item-cost"></div><div class="item-owned"></div></div>';
+        btn.querySelector(".item-name").textContent = item.name;
+        btn.querySelector(".item-desc").textContent = item.desc;
+        btn.addEventListener("click", () => buy(item));
+        container.appendChild(btn);
+      }
+    }
+
+    function renderShop(items) {
+      for (const item of items) {
+        const btn = document.getElementById("shop-" + item.id);
+        const cost = costOf(item);
+        btn.disabled = state.money < cost;
+        btn.querySelector(".item-cost").textContent = "$" + format(cost);
+        btn.querySelector(".item-owned").textContent = "Owned: " + owned(item.id);
+      }
+    }
+
+    function render() {
+      document.getElementById("score").textContent = "$" + format(state.money);
+      document.getElementById("mpc").textContent = "Money per Click: $" + format(moneyPerClick());
+      document.getElementById("mps").textContent = "Money per Second: $" + format(moneyPerSecond());
+      document.getElementById("totalEarned").textContent = "Total earned: $" + format(state.totalEarned);
+      renderShop(clickUpgrades);
+      renderShop(autoClickers);
+    }
+
+    function showFloatText(x, y, text) {
+      const el = document.createElement("div");
+      el.className = "float-text";
+      el.textContent = text;
+      el.style.left = x + "px";
+      el.style.top = y + "px";
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 800);
+    }
+
+    function save() {
+      state.lastSaved = Date.now();
+      try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+      } catch (e) {
+        // Storage unavailable (private mode etc.) - game still works, just won't persist.
+      }
+    }
+
+    function load() {
+      let saved = null;
+      try {
+        saved = JSON.parse(localStorage.getItem(SAVE_KEY));
+      } catch (e) {
+        saved = null;
+      }
+      if (!saved) return;
+      state = Object.assign(freshState(), saved);
+      applyOfflineEarnings();
+    }
+
+    function applyOfflineEarnings() {
+      const elapsed = Math.min((Date.now() - state.lastSaved) / 1000, OFFLINE_CAP_SECONDS);
+      const mps = moneyPerSecond();
+      if (elapsed < 10 || mps <= 0) return;
+      const earned = mps * elapsed * OFFLINE_RATE;
+      earn(earned);
+      document.getElementById("offlineText").textContent =
+        "While you were away for " + formatDuration(elapsed) +
+        ", your auto clickers earned $" + format(earned) + ".";
+      document.getElementById("offlinePopup").style.display = "flex";
+    }
+
+    function resetGame() {
+      if (!confirm("Reset all progress? This can't be undone.")) return;
+      state = freshState();
+      save();
+      render();
+    }
+
+    // --- Wire up ---
+    buildShop("clickShop", clickUpgrades);
+    buildShop("autoShop", autoClickers);
+
+    document.getElementById("clickButton").addEventListener("click", (e) => {
+      const amount = moneyPerClick();
+      earn(amount);
+      render();
+      showFloatText(e.clientX, e.clientY - 20, "+$" + format(amount));
+    });
+    document.getElementById("resetButton").addEventListener("click", resetGame);
+    document.getElementById("offlineClose").addEventListener("click", () => {
+      document.getElementById("offlinePopup").style.display = "none";
+    });
+
+    load();
+    render();
+
+    // Passive income loop: 10 ticks per second.
+    let lastTick = Date.now();
+    setInterval(() => {
+      const now = Date.now();
+      const dt = (now - lastTick) / 1000;
+      lastTick = now;
+      const mps = moneyPerSecond();
+      if (mps > 0) {
+        earn(mps * dt);
+        render();
+      }
+    }, 100);
+
+    setInterval(save, 5000);
+    window.addEventListener("beforeunload", save);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) save();
+    });
+  </script>
+</body>
+</html>
